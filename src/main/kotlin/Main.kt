@@ -1,49 +1,67 @@
 import org.apache.kafka.connect.runtime.isolation.*
+import java.io.File
 import java.net.URI
 import java.net.URL
 import java.nio.file.Path
-import kotlin.io.path.exists
-
-val classLoader = DelegatingClassLoader()
 
 fun main(args: Array<String>) {
 
     System.setProperty("org.slf4j.simpleLogger.defaultLogLevel","DEBUG")
 
-    // Try adding program arguments via Run/Debug configuration.
-    // Learn more about running applications: https://www.jetbrains.com/help/idea/running-applications.html.
     println("Program arguments: ${args.joinToString()}")
 
+    val jarPath = "file://${args[0]}"
 
-    val jarPath = "file://${args.get(0)}"
-    val pluginSources = pluginSources(jarPath)
+    val parent = ClassLoader.getSystemClassLoader()
+    val url = URI.create(jarPath).toURL()
+    val jarFiles = getJarFiles(url)
+    val jarFilesUrls = jarFiles.map{jF -> URI.create(jF).toURL()}.toTypedArray()
+    val classLoader = PluginClassLoader(url, jarFilesUrls, parent)
+    val pluginSources = pluginSources( Path.of(url.toURI()), jarFilesUrls,classLoader)
 
-    val scanner = ReflectionScanner()
+    scanPluginsAndPrint("Reflection Scanner", ReflectionScanner(), pluginSources)
+    scanPluginsAndPrint("Service Loader Scanner", ServiceLoaderScanner(), pluginSources)
 
-    val pluginScannerResult  = scanner.discoverPlugins(pluginSources)
 
-    println("Source Connectors:")
-    pluginScannerResult.sourceConnectors().forEach{
+}
+
+private fun scanPluginsAndPrint(
+    whichScanner: String,
+    scanner: PluginScanner,
+    pluginSources: Set<PluginSource>
+) {
+    val pluginScannerResult = scanner.discoverPlugins(pluginSources)
+
+    println("$whichScanner found Sink Connectors:")
+    pluginScannerResult.sinkConnectors().forEach {
         println(it.className())
     }
-
-
+    println("$whichScanner found Source Connectors:")
+    pluginScannerResult.sourceConnectors().forEach {
+        println(it.className())
+    }
 }
 
-private fun pluginSources(pathToMyJar: String): Set<PluginSource> {
-    val path: Path = Path.of(URI.create(pathToMyJar))
-    require(path.exists())
+fun getJarFiles(directoryPath: URL): Array<String> {
+    val directory = File(directoryPath.toURI())
 
+    require(!(!directory.exists() || !directory.isDirectory)) { "The provided path$directoryPath is not a valid directory" }
 
-    val url = URI.create(pathToMyJar).toURL()
+    return directory.listFiles { _, name -> name.endsWith(".jar") }
+        ?.map { "file://${directory.absolutePath}/${it.name}" }
+        ?.toTypedArray()
+        ?: emptyArray()
+}
 
-    val urls = arrayOf<URL>(url)
-
-    val pluginSource = PluginSource(
-        path,
-        PluginSource.Type.SINGLE_JAR,
-        classLoader,
-        urls
+private fun pluginSources(location: Path, pathToMyJars: Array<URL>, classLoader: ClassLoader): Set<PluginSource> {
+    return setOf(
+        PluginSource(
+            location,
+            PluginSource.Type.SINGLE_JAR,
+            classLoader,
+            pathToMyJars
+        )
     )
-    return setOf(pluginSource)
 }
+
+
